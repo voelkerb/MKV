@@ -1,3 +1,4 @@
-av
-pysubs2>=0.2.4
-typing
+av==19.0.2
+pysubs2==1.9.1
+numpy==2.5.4
+matplotlib==3.11.2

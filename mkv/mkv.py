@@ -4,6 +4,7 @@ import os
 import numpy as np
 import av
 import math
+import shutil
 from typing import Union, List, Tuple, Optional
 from pysubs2 import SSAFile, SSAEvent
 
@@ -19,6 +20,8 @@ class bcolors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
+AVError = getattr(av, "AVError", None) or av.error.FFmpegError
 
 VERBOSE = False
 # TODO: All LOAD-Functions crash with Seg Fault when containing more than 7 Streams
@@ -116,7 +119,7 @@ def seekLoad(filepath, seekPos, length, verbose=False, streamsToLoad=None, title
 
     # Open the container
     try: container = av.open(filepath)
-    except av.AVError: return []
+    except AVError: return []
     # Get available stream indices from file
     streams = [s for i, s in enumerate(container.streams) if (s.type == 'audio' or s.type == 'subtitle' or s.type == 'video')]
     # Look if it is a stream to be loaded
@@ -143,13 +146,13 @@ def seekLoad(filepath, seekPos, length, verbose=False, streamsToLoad=None, title
         dataDict[i]["storeIndex"] = 0 
     # Need to load container again here
     try: container = av.open(filepath)
-    except av.AVError: return []
+    except AVError: return []
 
     for stream in streams:
         index = stream.index
         if verbose: print(stream)
         container = av.open(filepath)
-        container.seek(start_pts, whence='time', any_frame=False, stream=stream)
+        container.seek(start_pts, any_frame=False, stream=stream)
         initCheck = False
         for frame in container.decode(streams=stream.index):
             # print(frame.sample_rate)
@@ -176,8 +179,8 @@ def seekLoad(filepath, seekPos, length, verbose=False, streamsToLoad=None, title
     # Make recarray from data
     for i in dataDict.keys():
         if dataDict[i]["type"] == 'audio' and len(dataDict[i]["data"]) > 0:
-            dataDict[i]["data"] = np.core.records.fromarrays(dataDict[i]["data"][:dataDict[index]["storeIndex"]].transpose(), dtype={'names': dataDict[i]["measures"], 'formats': ['f4']*len(dataDict[i]["measures"])})
-            del dataDict[index]["storeIndex"]
+            dataDict[i]["data"] = np.rec.fromarrays(dataDict[i]["data"][:dataDict[i]["storeIndex"]].transpose(), dtype={'names': dataDict[i]["measures"], 'formats': ['f4']*len(dataDict[i]["measures"])})
+            del dataDict[i]["storeIndex"]
     # RETURN it as a list
     return [dataDict[i] for i in dataDict.keys()]
 
@@ -225,7 +228,7 @@ def loadAudio(filepath: str, streamsToLoad: Optional[List[int]]=None, titles: Op
     """
     # Open the container
     try: container = av.open(filepath)
-    except av.AVError: return []
+    except AVError: return []
     # Get available stream indices from file
     streams = [s for i, s in enumerate(container.streams) if ( (s.type == 'audio') )]
     # Look if it is a stream to be loaded
@@ -263,7 +266,7 @@ def loadAudio(filepath: str, streamsToLoad: Optional[List[int]]=None, titles: Op
         index = stream.index
         if VERBOSE: print(stream)
         container = av.open(filepath)
-        container.seek(math.floor(start_pts), whence='time', any_frame=False, stream=stream)
+        container.seek(math.floor(start_pts), any_frame=False, stream=stream)
         initCheck = False
         for frame in container.decode(streams=stream.index):
             # Check seek status
@@ -329,7 +332,7 @@ def loadAudio(filepath: str, streamsToLoad: Optional[List[int]]=None, titles: Op
     # Make recarray from data
     for i in dataDict.keys():
         if "storeIndex" in dataDict[i]: del dataDict[i]["storeIndex"] 
-        dataDict[i]["data"] = np.core.records.fromarrays(dataDict[i]["data"].transpose(), dtype={'names': dataDict[i]["measures"], 'formats': ['f4']*len(dataDict[i]["measures"])})
+        dataDict[i]["data"] = np.rec.fromarrays(dataDict[i]["data"].transpose(), dtype={'names': dataDict[i]["measures"], 'formats': ['f4']*len(dataDict[i]["measures"])})
     # RETURN it as a list
     return [dataDict[i] for i in dataDict.keys()]
 
@@ -466,7 +469,7 @@ def chunkLoad(filepath, timeslice, starttime=0, stoptime=-1, verbose=False, stre
     chunkSizes, dataOnly, loadedFrames, dataLen, dataDict = {}, {}, {}, {}, {}
     # Open the container
     try: container = av.open(filepath)
-    except av.AVError: return []
+    except AVError: return []
     # NOTE: As for now, this only works for audio data
     # Get available stream indices from file
     streams = [s for i, s in enumerate(container.streams) if ( (s.type == 'audio') )]
@@ -522,7 +525,7 @@ def chunkLoad(filepath, timeslice, starttime=0, stoptime=-1, verbose=False, stre
                 currentLen = 0
                 while currentLen < chunkSizes[i]:
                     end = min(loadedFrames[i][0].shape[0], chunkSizes[i]-currentLen)
-                    dataOnly[i][currentLen:currentLen+end] = loadedFrames[0][i][:end]
+                    dataOnly[i][currentLen:currentLen+end] = loadedFrames[i][0][:end]
                     currentLen += end
                     loadedFrames[i][0] = loadedFrames[i][0][end:]
                     if loadedFrames[i][0].shape[0] == 0: del loadedFrames[i][0]
@@ -530,7 +533,7 @@ def chunkLoad(filepath, timeslice, starttime=0, stoptime=-1, verbose=False, stre
                 dataReturn[-1]["samples"] = dataOnly[i][:currentLen].shape[0]
                 dataReturn[-1]["duration"] = dataReturn[-1]["samples"]/dataReturn[-1]["samplingrate"]
                 dataReturn[-1]["timestamp"] = timestamps[i] + starttime + chunks*chunkSizes[i]/dataReturn[-1]["samplingrate"]
-                dataReturn[-1]["data"] = np.core.records.fromarrays(dataOnly[i][:currentLen].T, dtype={'names': dataReturn[-1]["measures"], 'formats': ['f4']*len(dataReturn[-1]["measures"])})
+                dataReturn[-1]["data"] = np.rec.fromarrays(dataOnly[i][:currentLen].T, dtype={'names': dataReturn[-1]["measures"], 'formats': ['f4']*len(dataReturn[-1]["measures"])})
                 dataLen[i] = max(0, dataLen[i]-chunkSizes[i])
             chunks += 1
             yield dataReturn
@@ -544,15 +547,15 @@ def chunkLoad(filepath, timeslice, starttime=0, stoptime=-1, verbose=False, stre
             # Copy data of frames into chunks
             currentLen = 0
             while currentLen < min(chunkSizes[i], dataLen[i]):
-                end = min(loadedFrames[i][0].shape[0], chunkSizes[i]-currentLen)
-                dataOnly[i][currentLen:currentLen+end] = loadedFrames[0][i][:end]
+                end = min(loadedFrames[i][0].shape[0], min(chunkSizes[i], dataLen[i])-currentLen)
+                dataOnly[i][currentLen:currentLen+end] = loadedFrames[i][0][:end]
                 currentLen += end
                 loadedFrames[i][0] = loadedFrames[i][0][end:]
                 if loadedFrames[i][0].shape[0] == 0: del loadedFrames[i][0]
             dataReturn[-1]["samples"] = dataOnly[i][:currentLen].shape[0]
             dataReturn[-1]["duration"] = dataReturn[-1]["samples"]/dataReturn[-1]["samplingrate"]
             dataReturn[-1]["timestamp"] = timestamps[i] + starttime + chunks*chunkSizes[i]/dataReturn[-1]["samplingrate"]
-            dataReturn[-1]["data"] = np.core.records.fromarrays(dataOnly[i][:currentLen].T, dtype={'names': dataReturn[-1]["measures"], 'formats': ['f4']*len(dataReturn[-1]["measures"])})
+            dataReturn[-1]["data"] = np.rec.fromarrays(dataOnly[i][:currentLen].T, dtype={'names': dataReturn[-1]["measures"], 'formats': ['f4']*len(dataReturn[-1]["measures"])})
             dataLen[i] = max(0, dataLen[i]-chunkSizes[i])
         yield dataReturn
 
@@ -603,7 +606,7 @@ def load(filepath, verbose=False, streamsToLoad=None, audio=True, video=False, s
     import pysubs2
     # Open the container
     try: container = av.open(filepath)
-    except av.AVError: return []
+    except AVError: return []
     # Get available stream indices from file
     streams = [s for i, s in enumerate(container.streams) if
         ( (s.type == 'audio' and audio) or (s.type == 'subtitle' and subs) or (s.type == 'video' and video) )
@@ -646,9 +649,9 @@ def load(filepath, verbose=False, streamsToLoad=None, audio=True, video=False, s
             if packet.stream.type == 'subtitle':
                 for rect in frame.rects:
                     if rect.type == b'srt':
-                        raise "To implement"
+                        raise NotImplementedError("srt subtitle rects are not supported")
                     if rect.type == b'ass':
-                        subList = rect.ass.lstrip("Dialogue: ").rstrip("\r\n").split(",")
+                        subList = rect.ass.removeprefix("Dialogue: ").rstrip("\r\n").split(",")
                         if len(subList) == 10:
                             start = __to_milliseconds(subList[1])
                             stop = __to_milliseconds(subList[2])
@@ -658,7 +661,7 @@ def load(filepath, verbose=False, streamsToLoad=None, audio=True, video=False, s
         if "storeIndex" in dataDict[i]:
             del dataDict[i]["storeIndex"] 
         if dataDict[i]["type"] == 'audio':
-            dataDict[i]["data"] = np.core.records.fromarrays(dataDict[i]["data"].transpose(), dtype={'names': dataDict[i]["measures"], 'formats': ['f4']*len(dataDict[i]["measures"])})
+            dataDict[i]["data"] = np.rec.fromarrays(dataDict[i]["data"].transpose(), dtype={'names': dataDict[i]["measures"], 'formats': ['f4']*len(dataDict[i]["measures"])})
         if dataDict[i]["type"] == 'subtitle':
             if verbose: print(dataDict[i]["subs"].to_string("srt"))
     # RETURN it as a list
@@ -833,7 +836,7 @@ def returnMetadataForDataDict(dataDict):
         metadata["CHANNELS"] = len(dataDict["measures"])
         metadata["CHANNEL_TAGS"] = "\"" + ",".join(dataDict["measures"]) + "\""
     if "title" in dataDict: metadata["title"] = dataDict["title"]
-    
+    return metadata
 
 def makeMkv(theDataList, outFilePath, extraArgs="", verbose=False):
     """
@@ -900,7 +903,7 @@ def makeMkv(theDataList, outFilePath, extraArgs="", verbose=False):
     # combine all streams
     combine(fileNames, outFilePath, verbose=verbose, reencode=True)
     # Remove tempdir
-    subprocess.check_output(['rm', '-rf', dirName])
+    shutil.rmtree(dirName, ignore_errors=True)
 
 def makeMkvRaw(data, outFilePath, samplingRate, extraArgs="", verbose=False):
     """
@@ -954,9 +957,7 @@ def bakeSubtitles(inFilePath, subtitlePaths, outFilePath, titles=None, extraArgs
     subs = subtitlePaths
     if isinstance(subtitlePaths, str):
         subs = [subtitlePaths]
-    if isinstance(titles, str):
-        tits = [titles]
-        print(tits)
+    tits = [titles] if isinstance(titles, str) else titles
     for sub in subs:
         systemCall += " -f"
         if ".ass" in sub: systemCall += " ass"
@@ -1038,7 +1039,7 @@ def concat(filePaths, filePath, extraArgs="", verbose=False):
     systemCall = "ffmpeg -hide_banner -f concat -safe 0 -i tmp_concat.txt -c copy " + extraArgs + " -y " + "'" + filePath + "'"
     __call_ffmpeg(systemCall, verbose=verbose)
     # Delete the temporary created concat file
-    subprocess.check_output(['rm', '-rf', 'tmp_concat.txt'])
+    os.remove('tmp_concat.txt')
 
 
 def __format_time(time, time_base):
@@ -1071,7 +1072,7 @@ def getMeta(path, streamIndex=0):
     """
     try:
         container = av.open(path)
-    except av.AVError:
+    except AVError:
         return None
     for stream in container.streams:
         if streamIndex == stream.index:
@@ -1092,7 +1093,7 @@ def info(path, format=None, option=[]):
     options = dict(x.split('=') for x in option)
     try:
         container = av.open(path, format=format, options=options)
-    except av.AVError:
+    except AVError:
         return None
     info = {}
     # This extracts container info
@@ -1126,7 +1127,7 @@ def info(path, format=None, option=[]):
         if stream.type == 'audio':
             streamInfo["#channels"] = stream.channels 
             # Extract the channel tags / measures 
-            channelTags = channelTags = ["C" + str(i) for i in range(stream.channels)]
+            channelTags = ["C" + str(i) for i in range(stream.channels)]
             for key in ["CHANNEL_TAGS", "Channel_tags"]:
                 if key in stream.metadata:
                     channelTags = stream.metadata[key].split(",")
@@ -1159,7 +1160,7 @@ def getSamples(path, format=None, option=[]):
     options = dict(x.split('=') for x in option)
     try:
         container = av.open(path, format=format, options=options)
-    except av.AVError:
+    except AVError:
         return 0
     # all streams to be extracted
     streams = [s for s in container.streams]
@@ -1168,12 +1169,12 @@ def getSamples(path, format=None, option=[]):
         if stream.type != "audio": continue
         try:
             container = av.open(path, format=format, options=options)
-        except av.AVError:
+        except AVError:
             return 0
         # Seek to the last frame in the container
-        container.seek(sys.maxsize, whence='time', any_frame=False, stream=stream)
+        container.seek(2**62, any_frame=False, stream=stream)
         for frame in container.decode(streams=stream.index):
-            samples[i] = int(frame.pts / 1000.0*frame.rate + frame.samples)
+            samples[i] = int(frame.pts / 1000.0*frame.sample_rate + frame.samples)
     return samples
 
 
@@ -1199,7 +1200,7 @@ def printInfo(path, audio=True, video=True, subs=True, count=5, format=None, opt
     options = dict(x.split('=') for x in option)
     try:
         container = av.open(path, format=format, options=options)
-    except av.AVError:
+    except AVError:
         print("Error opening file")
         return
     print('container:', container)
